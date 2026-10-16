@@ -2197,7 +2197,7 @@
 
 
 
-    <span>提示：选择投递状态会自动记上当天日期（如 2026-09-05）；点进度条上的日期可把该环节更新为今天；清空请在下拉框选“未填写”。表格按“更新时间 / 公司 / 企业类型 / 招聘届次 / 行业类别 / 岗位方向 / 投递入口 / 投递进度”排列，岗位详情与备注见“岗位方向”，投递渠道见“投递入口”；没有校招官网入口的公司会直接标注公众号/邮箱等投递方式。进度只保存在本机浏览器，不会上传到任何服务器，可随时导出 CSV / 备份 JSON。</span>
+    <span>提示：选择投递状态会自动记上当天日期（如 2026-09-05）；点进度条上的日期可把该环节更新为今天；清空请在下拉框选“未填写”。表格按“更新时间 / 公司 / 企业类型 / 招聘届次 / 行业类别 / 岗位方向 / 投递入口 / 投递进度”排列，岗位详情与备注见“岗位方向”，投递渠道见“投递入口”；没有校招官网入口的公司会直接标注公众号/邮箱等投递方式。进度默认保存在本机浏览器，可随时导出 CSV / 备份 JSON；如需换设备看同一份进度，用「☁ 上传到云端 / 从云端拉取」把它存到自己的 GitHub 仓库（可在「云同步设置」里改成打开页面自动同步）。</span>
 
 
 
@@ -2205,7 +2205,7 @@
 
 
 
-    <span><a href="#" id="backup" role="button">备份进度</a> ｜ <a href="#" id="restore" role="button">恢复进度</a></span>
+    <span><a href="#" id="backup" role="button">备份进度</a> ｜ <a href="#" id="restore" role="button">恢复进度</a> ｜ <a href="#" id="cloudPull" role="button">☁ 从云端拉取</a> ｜ <a href="#" id="cloudPush" role="button">☁ 上传到云端</a> ｜ <a href="#" id="cloudCfg" role="button">云同步设置</a></span>
 
 
 
@@ -2214,6 +2214,174 @@
 
 
     <input type="file" id="restoreFile" accept=".json" hidden>
+
+    <div id="cloudCfgBox" hidden style="margin:8px 0;padding:10px 12px;border:1px solid #d0d7de;border-radius:8px;background:#f6f8fa;max-width:820px;line-height:2">
+      <div>存进度的仓库：<input id="cfgRepo" style="width:240px" placeholder="FaTing0709/qiuzhao_upup">　分支：<input id="cfgBranch" style="width:90px" placeholder="main"></div>
+      <div>GitHub Token（只在「上传」时需要，只保存在本机浏览器）：<input id="cfgToken" type="password" style="width:340px" placeholder="github_pat_..."></div>
+      <div><label><input type="checkbox" id="cfgAuto" checked> 打开页面时自动从云端拉取（默认开启，换设备打开就是最新进度）</label></div>
+      <div><label><input type="checkbox" id="cfgAutoPush"> 改动进度后自动上传（需先填 Token；30 秒内的连续改动只上传一次）</label></div>
+      <div><button class="btn" id="cfgSave" type="button">保存</button> <button class="btn" id="cfgClose" type="button">关闭</button>
+      <span style="color:#666">Token 获取：GitHub 右上角头像 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token → Repository access 只选这一个仓库 → Permissions 里 Contents 设为 Read and write</span></div>
+    </div>
+
+    <script>
+    /* ============ 云同步：把投递进度存到 GitHub 仓库，换设备点「拉取」即可 ============ */
+    var CLOUD_KEY = "qiuzhao_cloud_cfg_v1";
+    function cloudCfg() { try { return JSON.parse(localStorage.getItem(CLOUD_KEY)) || {}; } catch (e) { return {}; } }
+    function cloudParts() {
+      var c = cloudCfg();
+      var repo = (c.repo || "FaTing0709/qiuzhao_upup").trim();
+      if (repo.indexOf("/") < 0) repo = "FaTing0709/" + repo;
+      var seg = repo.split("/");
+      return { owner: (seg[0] || "FaTing0709").trim(), name: (seg[1] || "qiuzhao_upup").trim(), branch: (c.branch || "main").trim() || "main", token: (c.token || "").trim() };
+    }
+    function b64utf8(s) {
+      var b = new TextEncoder().encode(s), bin = "";
+      for (var i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+      return btoa(bin);
+    }
+    function b64decode(b64) {
+      var bin = atob(b64), arr = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new TextDecoder().decode(arr);
+    }
+    function countRecs(obj) {
+      var n = 0;
+      try {
+        DATA.forEach(function (d) {
+          var r = coerceRec(obj[d.company]);
+          if (r && (r.stage || STATUSES.some(function (st) { return r.dates[st]; }))) n++;
+        });
+      } catch (e) {}
+      return n;
+    }
+    function applyProgress(data) {
+      _noSchedule = true;
+      DATA.forEach(function (d) {
+        var r = coerceRec(data[d.company]);
+        if (r && (r.stage || STATUSES.some(function (st) { return r.dates[st]; }))) progress[d.company] = r;
+      });
+      saveProgress();
+      render();
+      _noSchedule = false;
+    }
+    async function cloudPull(silent) {
+      var p = cloudParts();
+      var url = "https://raw.githubusercontent.com/" + p.owner + "/" + p.name + "/" + p.branch + "/progress.json?t=" + Date.now();
+      var res;
+      try { res = await fetch(url, { cache: "no-store" }); }
+      catch (err) { if (!silent) alert("连不上 GitHub，请检查网络后重试。\n" + err.message); return; }
+      if (!res.ok) { if (!silent) alert("云端还没有进度文件（HTTP " + res.status + "）。\n请先在填好进度的设备上点『☁ 上传到云端』。"); return; }
+      var data;
+      try { data = await res.json(); } catch (err) { if (!silent) alert("云端文件内容不是有效的 JSON。"); return; }
+      var before = countRecs(progress);
+      applyProgress(data);
+      if (!silent) alert("已拉取并合并：现在本机 " + countRecs(progress) + " 家（拉取前 " + before + " 家，云端 " + countRecs(data) + " 家）。");
+    }
+    async function cloudPush() {
+      var p = cloudParts();
+      if (!p.token) {
+        document.getElementById("cloudCfgBox").hidden = false;
+        alert("上传需要 GitHub Token（每台要上传的设备填一次即可，只存在本机浏览器，不会写进代码或仓库）。\n\n获取方式：GitHub 头像 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token\n→ Repository access 选 " + p.owner + "/" + p.name + "\n→ Permissions 里 Contents 设为 Read and write");
+        return;
+      }
+      var api = "https://api.github.com/repos/" + p.owner + "/" + p.name + "/contents/progress.json";
+      var head = { "Accept": "application/vnd.github+json", "Content-Type": "application/json", "Authorization": "Bearer " + p.token };
+      var g;
+      try { g = await fetch(api + "?ref=" + p.branch, { headers: head }); }
+      catch (err) { alert("连不上 GitHub API，请检查网络后重试。\n" + err.message); return; }
+      var sha = null, cloudData = null;
+      if (g.ok) {
+        var j = await g.json();
+        sha = j.sha;
+        try { cloudData = JSON.parse(b64decode((j.content || "").replace(/\n/g, ""))); } catch (e) {}
+      } else if (g.status !== 404) {
+        var ej = await g.json().catch(function () { return {}; });
+        alert("读取云端失败：" + (ej.message || g.status) + "\n请检查仓库名、分支，以及 Token 是否有 Contents 读写权限。");
+        return;
+      }
+      var localN = countRecs(progress), cloudN = cloudData ? countRecs(cloudData) : 0;
+      if (cloudData && cloudN > localN && !confirm("云端有 " + cloudN + " 家记录，本机只有 " + localN + " 家。\n继续上传会用本机覆盖云端，可能丢失云端的新记录。\n建议先点『☁ 从云端拉取』合并后再上传。\n\n确定仍要覆盖吗？")) return;
+      var body = { message: "update progress " + new Date().toISOString().slice(0, 19).replace("T", " "), content: b64utf8(JSON.stringify(progress, null, 2)), branch: p.branch };
+      if (sha) body.sha = sha;
+      var r;
+      try { r = await fetch(api, { method: "PUT", headers: head, body: JSON.stringify(body) }); }
+      catch (err) { alert("连不上 GitHub API，请检查网络后重试。\n" + err.message); return; }
+      if (r.ok || r.status === 201) {
+        alert("已上传 " + localN + " 家进度到 " + p.owner + "/" + p.name + "。\n换设备打开同一网址，点『☁ 从云端拉取』即可看到相同进度。");
+      } else {
+        var rj = await r.json().catch(function () { return {}; });
+        alert("上传失败：" + (rj.message || r.status));
+      }
+    }
+    document.getElementById("cloudPull").addEventListener("click", function (e) {
+      e.preventDefault();
+      var b = e.target, t = b.textContent;
+      b.textContent = "拉取中…";
+      cloudPull(false).then(function () { b.textContent = t; }, function () { b.textContent = t; });
+    });
+    document.getElementById("cloudPush").addEventListener("click", function (e) {
+      e.preventDefault();
+      var b = e.target, t = b.textContent;
+      b.textContent = "上传中…";
+      cloudPush().then(function () { b.textContent = t; }, function () { b.textContent = t; });
+    });
+    document.getElementById("cloudCfg").addEventListener("click", function (e) {
+      e.preventDefault();
+      var box = document.getElementById("cloudCfgBox");
+      box.hidden = !box.hidden;
+      if (!box.hidden) {
+        var c = cloudCfg();
+        document.getElementById("cfgRepo").value = c.repo || "FaTing0709/qiuzhao_upup";
+        document.getElementById("cfgBranch").value = c.branch || "main";
+        document.getElementById("cfgToken").value = c.token || "";
+        document.getElementById("cfgAuto").checked = c.auto !== false;
+        document.getElementById("cfgAutoPush").checked = !!c.autoPush;
+      }
+    });
+    document.getElementById("cfgSave").addEventListener("click", function () {
+      var c = cloudCfg();
+      c.repo = document.getElementById("cfgRepo").value.trim();
+      c.branch = document.getElementById("cfgBranch").value.trim();
+      c.token = document.getElementById("cfgToken").value.trim();
+      c.auto = document.getElementById("cfgAuto").checked;
+      c.autoPush = document.getElementById("cfgAutoPush").checked;
+      localStorage.setItem(CLOUD_KEY, JSON.stringify(c));
+      document.getElementById("cloudCfgBox").hidden = true;
+      alert("已保存到本机浏览器。");
+    });
+    document.getElementById("cfgClose").addEventListener("click", function () {
+      document.getElementById("cloudCfgBox").hidden = true;
+    });
+    var _noSchedule = false, _pushTimer = null;
+    function scheduleAutoPush() {
+      if (_noSchedule) return;
+      var c = cloudCfg();
+      if (!c.autoPush || !c.token) return;
+      if (_pushTimer) clearTimeout(_pushTimer);
+      _pushTimer = setTimeout(function () { _pushTimer = null; cloudPushSilent(); }, 30000);
+    }
+    function cloudPushSilent() {
+      var oa = window.alert, oc = window.confirm;
+      window.alert = function () {};
+      window.confirm = function () { return false; };
+      return Promise.resolve(cloudPush()).then(
+        function (v) { window.alert = oa; window.confirm = oc; return v; },
+        function (e) { window.alert = oa; window.confirm = oc; }
+      );
+    }
+    setTimeout(function () {
+      if (typeof saveProgress === "function") {
+        var _origSave = saveProgress;
+        saveProgress = function () {
+          _origSave.apply(this, arguments);
+          try { scheduleAutoPush(); } catch (e) {}
+        };
+      }
+      var c = cloudCfg();
+      if (c.auto !== false) cloudPull(true);
+    }, 600);
+    </script>
 
 
 
