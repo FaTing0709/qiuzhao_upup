@@ -2268,7 +2268,9 @@
     async function cloudFetchJson(p) {
       var api = "https://api.github.com/repos/" + p.owner + "/" + p.name + "/contents/progress.json?ref=" + encodeURIComponent(p.branch) + "&t=" + Date.now();
       try {
-        var r = await fetch(api, { headers: { "Accept": "application/vnd.github+json" }, cache: "no-store" });
+        var hd = { "Accept": "application/vnd.github+json" };
+        if (p.token) hd["Authorization"] = "Bearer " + p.token;
+        var r = await fetch(api, { headers: hd, cache: "no-store" });
         if (r.ok) {
           var j = await r.json();
           return JSON.parse(b64decode((j.content || "").replace(/\n/g, "")));
