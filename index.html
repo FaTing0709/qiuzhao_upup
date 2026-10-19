@@ -2311,7 +2311,11 @@
         alert("已上传 " + localN + " 家进度到 " + p.owner + "/" + p.name + "。\n换设备打开同一网址，点『☁ 从云端拉取』即可看到相同进度。");
       } else {
         var rj = await r.json().catch(function () { return {}; });
-        alert("上传失败：" + (rj.message || r.status));
+        var msg = rj.message || String(r.status);
+        if (r.status === 403 || msg.indexOf("Resource not accessible") >= 0) {
+          msg += "\n\n多半是 Token 权限没给对：GitHub 头像 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → 点开你这个 token → Repository permissions → Contents 改成 Read and write → Save，然后重试。";
+        }
+        alert("上传失败：" + msg);
       }
     }
     document.getElementById("cloudPull").addEventListener("click", function (e) {
