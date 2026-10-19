@@ -2265,15 +2265,32 @@
       render();
       _noSchedule = false;
     }
+    async function cloudFetchJson(p) {
+      var api = "https://api.github.com/repos/" + p.owner + "/" + p.name + "/contents/progress.json?ref=" + encodeURIComponent(p.branch) + "&t=" + Date.now();
+      try {
+        var r = await fetch(api, { headers: { "Accept": "application/vnd.github+json" }, cache: "no-store" });
+        if (r.ok) {
+          var j = await r.json();
+          return JSON.parse(b64decode((j.content || "").replace(/\n/g, "")));
+        }
+      } catch (e) {}
+      var raw = "https://raw.githubusercontent.com/" + p.owner + "/" + p.name + "/" + p.branch + "/progress.json?t=" + Date.now();
+      var r2 = await fetch(raw, { cache: "no-store" });
+      if (!r2.ok) throw new Error("HTTP " + r2.status);
+      return await r2.json();
+    }
     async function cloudPull(silent) {
       var p = cloudParts();
-      var url = "https://raw.githubusercontent.com/" + p.owner + "/" + p.name + "/" + p.branch + "/progress.json?t=" + Date.now();
-      var res;
-      try { res = await fetch(url, { cache: "no-store" }); }
-      catch (err) { if (!silent) alert("连不上 GitHub，请检查网络后重试。\n" + err.message); return; }
-      if (!res.ok) { if (!silent) alert("云端还没有进度文件（HTTP " + res.status + "）。\n请先在填好进度的设备上点『☁ 上传到云端』。"); return; }
       var data;
-      try { data = await res.json(); } catch (err) { if (!silent) alert("云端文件内容不是有效的 JSON。"); return; }
+      try { data = await cloudFetchJson(p); }
+      catch (err) {
+        if (!silent) {
+          var m = String(err.message || err);
+          if (m.indexOf("404") >= 0) alert("云端还没有进度文件。\n请先在填好进度的设备上点『☁ 上传到云端』。");
+          else alert("拉取失败：" + m + "\n请检查网络后重试。");
+        }
+        return;
+      }
       var before = countRecs(progress);
       applyProgress(data);
       if (!silent) alert("已拉取并合并：现在本机 " + countRecs(progress) + " 家（拉取前 " + before + " 家，云端 " + countRecs(data) + " 家）。");
