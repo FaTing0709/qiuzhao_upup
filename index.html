@@ -2206,6 +2206,7 @@
 
 
     <span><a href="#" id="backup" role="button">备份进度</a> ｜ <a href="#" id="restore" role="button">恢复进度</a> ｜ <a href="#" id="cloudPull" role="button">☁ 从云端拉取</a> ｜ <a href="#" id="cloudPush" role="button">☁ 上传到云端</a> ｜ <a href="#" id="cloudCfg" role="button">云同步设置</a></span>
+    <span id="cloudStatus" style="margin-left:10px;color:#666"></span>
 
 
 
@@ -2290,12 +2291,13 @@
           var m = String(err.message || err);
           if (m.indexOf("404") >= 0) alert("云端还没有进度文件。\n请先在填好进度的设备上点『☁ 上传到云端』。");
           else alert("拉取失败：" + m + "\n请检查网络后重试。");
-        }
+        } else { setCloudStatus(false, "拉取失败"); }
         return;
       }
       var before = countRecs(progress);
       applyProgress(data);
       if (!silent) alert("已拉取并合并：现在本机 " + countRecs(progress) + " 家（拉取前 " + before + " 家，云端 " + countRecs(data) + " 家）。");
+      else setCloudStatus(true);
     }
     async function cloudPush() {
       var p = cloudParts();
@@ -2384,13 +2386,25 @@
       if (_pushTimer) clearTimeout(_pushTimer);
       _pushTimer = setTimeout(function () { _pushTimer = null; cloudPushSilent(); }, 30000);
     }
+    function setCloudStatus(ok, detail) {
+      var el = document.getElementById("cloudStatus");
+      if (!el) return;
+      var t = new Date();
+      var hm = String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+      el.textContent = ok ? ("已同步 " + hm) : ("同步失败 " + hm + "：" + (detail || "未知原因"));
+      el.style.color = ok ? "#1a7f37" : "#c0392b";
+    }
     function cloudPushSilent() {
-      var oa = window.alert, oc = window.confirm;
-      window.alert = function () {};
+      var oa = window.alert, oc = window.confirm, last = "";
+      window.alert = function (m) { last = String(m); };
       window.confirm = function () { return false; };
       return Promise.resolve(cloudPush()).then(
-        function (v) { window.alert = oa; window.confirm = oc; return v; },
-        function (e) { window.alert = oa; window.confirm = oc; }
+        function () {
+          window.alert = oa; window.confirm = oc;
+          if (last.indexOf("已上传") >= 0) setCloudStatus(true);
+          else setCloudStatus(false, (last || "未知原因").split("\n")[0]);
+        },
+        function () { window.alert = oa; window.confirm = oc; setCloudStatus(false, "网络异常"); }
       );
     }
     setTimeout(function () {
